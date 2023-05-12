@@ -1,0 +1,354 @@
+import tkinter as tk
+import sqlite3
+from cryptography.fernet import Fernet
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+from cryptography.hazmat.backends import default_backend
+import base64
+
+window = tk.Tk()
+master_key = ""
+
+    
+def vault_window():
+    
+    def show_accounts():
+        # select all accounts from the database and decraypt their username and passwords, display them in the listbox
+        conn = sqlite3.connect('vault.db')
+        c = conn.cursor()
+        c.execute("SELECT * FROM accounts")
+        accounts = c.fetchall()
+        conn.close()
+        account_list.delete(0, tk.END)
+        # if there are no accounts in the database, display a message
+        if len(accounts) == 0:
+            account_list.insert(tk.END, "No accounts found")
+        else:
+            for account in accounts:
+                username = decrypt_password(account[1], master_key)
+                password = decrypt_password(account[2], master_key)
+                account_list.insert(tk.END, f"{account[3]}: {username} - {password}")
+                
+    # Function to handle the "Add" button click event
+    def add_account():
+        # Retrieve account information from text fields
+        username = username_entry.get()
+        password = password_entry.get()
+        account_name = account_name_entry.get()
+        
+        # Check if any of the fields are empty
+        if not username or not password or not account_name:
+            show_error("Error: All fields are required")
+            return
+
+        # Encrypt the password securely
+        encrypted_password = encrypt_password(password, master_key)
+
+        # Save the account information to the database
+        conn = sqlite3.connect('vault.db')
+        c = conn.cursor()
+        c.execute("INSERT INTO accounts (username, password, accountName) VALUES (?, ?, ?)",
+                    (username, encrypted_password, account_name))
+        conn.commit()
+        conn.close()
+
+        # Clear the text fields
+        username_entry.delete(0, tk.END)
+        password_entry.delete(0, tk.END)
+        account_name_entry.delete(0, tk.END)
+        show_accounts()
+        
+    # Create the main window
+    window.title("Account Manager")
+    window.configure(bg="#303030")  # Dark gray background
+    window.geometry("400x300")  # Set window size
+
+    # Create text fields for entering account information
+    username_label = tk.Label(window, text="Username:", bg="#303030", fg="white")
+    username_entry = tk.Entry(window, width=30)
+    password_label = tk.Label(window, text="Password:", bg="#303030", fg="white")
+    password_entry = tk.Entry(window, width=30, show="*")
+    account_name_label = tk.Label(window, text="Account Name:", bg="#303030", fg="white")
+    account_name_entry = tk.Entry(window, width=30)
+
+    # Create buttons for adding, deleting, and logging into accounts
+    button_color = "#1e88e5"  # Blue color for buttons
+
+    add_button = tk.Button(window, text="Add", bg=button_color, fg="white", bd=0, borderwidth=0,
+                        highlightthickness=0, relief="flat", padx=12, pady=6, font=("Arial", 12), width=10,
+                        highlightbackground=button_color, highlightcolor=button_color, activebackground=button_color,
+                        activeforeground="white", command=add_account)
+    delete_button = tk.Button(window, text="Delete", bg=button_color, fg="white", bd=0, borderwidth=0,
+                            highlightthickness=0, relief="flat", padx=12, pady=6, font=("Arial", 12), width=10,
+                            highlightbackground=button_color, highlightcolor=button_color,
+                            activebackground=button_color, activeforeground="white", command=delete_account)
+    show_button = tk.Button(window, text="Show", bg=button_color, fg="white", bd=0, borderwidth=0,
+                            highlightthickness=0, relief="flat", padx=12, pady=6, font=("Arial", 12), width=10,
+                            highlightbackground=button_color, highlightcolor=button_color,
+                            activebackground=button_color, activeforeground="white", command=show_accounts)
+
+    # Create a list for displaying accounts
+    account_list = tk.Listbox(window, bg="#424242", fg="white", selectbackground=button_color,
+                            selectforeground="white")
+
+    # Set padding and alignment for all labels
+    labels = [username_label, password_label, account_name_label]
+    for label in labels:
+        label.configure(padx=6, pady=4)
+        
+    # Grid layout (continued)
+    username_label.grid(row=0, column=0, sticky="w", padx=5, pady=10)
+    username_entry.grid(row=0, column=1, padx=10, pady=10)
+    password_label.grid(row=1, column=0, sticky="w", padx=5, pady=10)
+    password_entry.grid(row=1, column=1, padx=10, pady=10)
+    account_name_label.grid(row=2, column=0, sticky="e", padx=5, pady=10)
+    account_name_entry.grid(row=2, column=1, padx=10, pady=10)
+    add_button.grid(row=3, column=0, pady=(10, 5), padx=10)
+    delete_button.grid(row=3, column=1, pady=(10, 5), padx=10)
+    show_button.grid(row=3, column=2, pady=(10, 5), padx=10)
+    account_list.grid(row=4, columnspan=4, padx=10, pady=(0, 10), sticky="nsew")
+
+    # Configure grid weights to allow resizing of the listbox
+    window.grid_columnconfigure(0, weight=1, minsize=100)  # Username label
+    window.grid_columnconfigure(1, weight=1)
+    window.grid_columnconfigure(2, weight=1)
+    window.grid_columnconfigure(3, weight=1)
+    window.grid_rowconfigure(4, weight=1)
+    
+
+# Function to securely encrypt passwords
+def encrypt_password(password, private_key):
+    # Generate a salt (random value) for PBKDF2
+    salt = b'\x8c\xf1\xf5\x94\x97\x1a\xd7\xa1\xfa\x13h\xe3\x94J^\xf4'
+
+    # Derive the key from the password using PBKDF2
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=salt,
+        iterations=100000,
+        backend=default_backend()
+    )
+    key = kdf.derive(private_key.encode())
+    
+    # Base64-encode the key as URL-safe
+    key = base64.urlsafe_b64encode(key)
+    
+    # Create a Fernet cipher suite with the derived key
+    cipher_suite = Fernet(key)
+
+    # Encrypt the master password securely
+    encrypted_password = cipher_suite.encrypt(password.encode())
+    return encrypted_password
+
+# Function to securely decrypt passwords
+def decrypt_password(encrypted_password, private_key):
+    print(private_key)
+    # Derive the key from the entered password using PBKDF2
+    salt = b'\x8c\xf1\xf5\x94\x97\x1a\xd7\xa1\xfa\x13h\xe3\x94J^\xf4'
+    kdf = PBKDF2HMAC(
+        algorithm=hashes.SHA256(),
+        length=32,
+        salt=salt,
+        iterations=100000,
+        backend=default_backend()
+    )
+    key = kdf.derive(private_key.encode())
+
+    # Base64-encode the key as URL-safe
+    key = base64.urlsafe_b64encode(key)
+
+    # Create a Fernet cipher suite with the derived key
+    cipher_suite = Fernet(key)
+
+    # Decrypt the encrypted password
+    decrypted_password = cipher_suite.decrypt(encrypted_password)
+    return decrypted_password
+
+
+
+def check_database():
+    # Function to handle the "Master Password" button click event
+    def set_master_password():
+        # Retrieve the master password from the entry field
+        master_password = master_password_entry.get()
+        
+        # Check if the master password is empty
+        if not master_password:
+            show_error("Error: Master password cannot be empty")
+            return
+
+        # Encrypt the master password securely
+        encrypted_master_password = encrypt_password("26Vf6T%M$6nf", master_password)
+        
+        # Save the master password to the database
+        conn = sqlite3.connect('vault.db')
+        c = conn.cursor()
+        c.execute("INSERT INTO master (encryptedKey) VALUES (?)", (encrypted_master_password,))
+        conn.commit()
+        conn.close()
+        
+        # Close the pop-up window
+        master_password_window.destroy()
+        open_password_popup()
+        
+    try:
+        conn = sqlite3.connect('vault.db')
+        c = conn.cursor()
+
+        # Check if the master table exists
+        c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='master'")
+        table_exists = c.fetchone()
+        # Check if the master_password column exists and has a non-null value
+        if table_exists:
+            c.execute("PRAGMA table_info(master)")
+            columns = c.fetchall()
+            master_password_exists = any(column[1] == 'encryptedKey' for column in columns)
+
+            if master_password_exists:
+                c.execute("SELECT encryptedKey FROM master")
+                db_master_password = c.fetchone()
+                conn.close()
+
+                if db_master_password is not None:
+                    # check if accoutns table exists
+                    conn = sqlite3.connect('vault.db')  
+                    c = conn.cursor()
+                    c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='accounts'")
+                    table_exists = c.fetchone()
+                    conn.close()
+                    
+                    print(table_exists)
+                    # if table doesn't exist, create it
+                    if not table_exists:
+                        conn = sqlite3.connect('vault.db')
+                        c = conn.cursor()
+                        c.execute("CREATE TABLE accounts (username TEXT, password TEXT, accountName TEXT)")
+                        conn.commit()
+                        conn.close()
+                        
+                    open_password_popup()
+                else:
+                    # If the master password is null, then prompt the user to set a new one
+                    master_password_window = tk.Toplevel()
+                    master_password_window.title("Set Master Password")
+                    
+                    # Create a label and entry for the master password
+                    master_password_label = tk.Label(master_password_window, text="Master Password:")
+                    master_password_label.pack()
+                    master_password_entry = tk.Entry(master_password_window, show="*")
+                    master_password_entry.pack()
+                    
+                    # Create a button to set the master password
+                    set_master_password_button = tk.Button(master_password_window, text="Set Master Password", command=set_master_password)
+                    set_master_password_button.pack()
+                    
+                    # Create a button to cancel setting the master password
+                    cancel_button = tk.Button(master_password_window, text="Cancel", command=master_password_window.destroy)
+                    cancel_button.pack()
+                    
+                    master_password_window.mainloop()
+            else:
+                # If the master_password column does not exist, delete the table and create a new one
+                c.execute("DROP TABLE master")
+                conn.commit()
+                conn.close()
+                check_database()
+        else:
+            # If the master table does not exist, then create a new one
+            c.execute("CREATE TABLE master (id INTEGER PRIMARY KEY, encryptedKey BLOB)")
+            conn.commit()
+            check_database()
+            
+            
+
+    except sqlite3.Error:
+        # Exception occurred while accessing the database
+        # print error with traceback
+        print("Error: " + str(sqlite3.Error))
+        pass
+    
+
+def verify_master_password(entered_password, popup_window):
+    entered_password
+    # Retrieve the encrypted password from the database
+    conn = sqlite3.connect('vault.db')
+    c = conn.cursor()
+    c.execute("SELECT encryptedKey FROM master WHERE id=1")
+    encrypted_password = c.fetchone()[0]
+    conn.close()
+
+    # Decrypt the encrypted password
+    decrypted_password = decrypt_password(encrypted_password, entered_password)
+    # Compare the decrypted password with the entered password
+    if decrypted_password.decode() != "26Vf6T%M$6nf":
+        show_error("Error: Incorrect password")
+    else:
+        # If the password is correct, close the pop-up window and proceed
+        popup_window.destroy()
+        global master_key
+        master_key = entered_password
+        vault_window()
+
+def open_password_popup():
+    # Create the pop-up window
+    popup_window = tk.Toplevel()
+    popup_window.title("Enter Master Password")
+
+    # Create a label and entry for the password
+    password_label = tk.Label(popup_window, text="Master Password:")
+    password_label.pack()
+    password_entry = tk.Entry(popup_window, show="*")
+    password_entry.pack()
+
+    def on_verify():
+        entered_password = password_entry.get()
+        verify_master_password(entered_password, popup_window)
+
+    # Create a button to verify the master password
+    verify_button = tk.Button(popup_window, text="Verify", command=on_verify)
+    verify_button.pack()
+
+    popup_window.mainloop()
+
+
+
+# Function to handle the "Delete" button click event
+def delete_account():
+    # Retrieve selected account information from the list
+    selected_item = account_listbox.curselection()
+    if selected_item:
+        account_id = account_listbox.get(selected_item)
+        conn = sqlite3.connect('accounts.db')
+        c = conn.cursor()
+        c.execute("DELETE FROM accounts WHERE id=?", (account_id,))
+        conn.commit()
+        conn.close()
+
+        # Update the account list display
+        update_account_list()
+
+# Function to handle the "Show" button click event
+def toggle_visibility():
+    # Toggle the visibility of the passwords
+    password_entry.config(show="" if password_visible.get() else "*")
+
+# Function to handle the "Login" button click event
+def login():
+    # Retrieve the file path for the League of Legends client
+    pass
+
+# Create a separate window for displaying errors
+def show_error(message):
+    error_window = tk.Toplevel(window)
+    error_window.title("Error")
+    error_label = tk.Label(error_window, text=message, fg="red")
+    error_label.pack()
+    ok_button = tk.Button(error_window, text="OK", command=error_window.destroy)
+    ok_button.pack()
+    
+
+if check_database():
+    # Create a button to open the password pop-up window
+    password_button = tk.Button(window, text="Enter Master Password", command=open_password_popup)
+    password_button.pack()
